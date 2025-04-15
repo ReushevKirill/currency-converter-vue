@@ -1,5 +1,4 @@
-// src/composables/useConverter.ts
-import { ref, watch, computed } from 'vue'
+import { ref, watch, computed, watchEffect } from 'vue'
 import type { Ref } from 'vue'
 import { useCurrencyStore } from '@/stores/currencyStore'
 import type { SupportedCurrencyCode, RelevantExchangePairs } from '@/types/currency'
@@ -9,11 +8,12 @@ interface UseConverterReturn {
   amount2: Ref<number | null>
   currency1: Ref<SupportedCurrencyCode>
   currency2: Ref<SupportedCurrencyCode>
-  conversionRate: Ref<number | null>
+  conversionRate: Ref<number | null> // Для отображения курса 1 -> 2
   error: Ref<string | null>
   loading: Ref<boolean>
   handleAmount1Input: (value: number | null) => void
   handleAmount2Input: (value: number | null) => void
+  swapCurrencies: () => void
 }
 
 export function useConverter(
@@ -22,14 +22,15 @@ export function useConverter(
 ): UseConverterReturn {
   const currencyStore = useCurrencyStore()
 
+  // Состояние
   const amount1 = ref<number | null>(null)
   const amount2 = ref<number | null>(null)
   const currency1 = ref<SupportedCurrencyCode>(initialCurrency1)
   const currency2 = ref<SupportedCurrencyCode>(initialCurrency2)
-
   const lastEdited = ref<'amount1' | 'amount2' | null>(null)
   const conversionError = ref<string | null>(null)
 
+  // Получение курса
   const getConversionRate = (
     from: SupportedCurrencyCode,
     to: SupportedCurrencyCode,
@@ -43,57 +44,70 @@ export function useConverter(
       return allRates[directPairKey]
     }
     console.error(`Conversion rate for ${from} -> ${to} not found.`)
-    return null
+    return null // Курс не найден
   }
 
-  const conversionRate = computed(() => {
-    if (
-      currencyStore.loading ||
-      currencyStore.error ||
-      Object.keys(currencyStore.rates).length === 0
-    ) {
-      return null
-    }
-    return getConversionRate(currency1.value, currency2.value, currencyStore.rates)
-  })
-
-  // --- Новая функция для конвертации ---
-  const convertAmount = (
-    editedAmount: Ref<number | null>,
-    sourceCurrency: Ref<SupportedCurrencyCode>,
-    targetAmount: Ref<number | null>,
-    targetCurrency: Ref<SupportedCurrencyCode>,
-    isForward: boolean, // Флаг, указывающий прямое или обратное преобразование
+  const calculateAndUpdateTarget = (
+    sourceAmountRef: Ref<number | null>,
+    sourceCurrencyRef: Ref<SupportedCurrencyCode>,
+    targetCurrencyRef: Ref<SupportedCurrencyCode>,
+    targetAmountRef: Ref<number | null>,
   ) => {
     conversionError.value = null
-    const rate = isForward
-      ? conversionRate.value
-      : getConversionRate(sourceCurrency.value, targetCurrency.value, currencyStore.rates)
+    const sourceAmount = sourceAmountRef.value
+    const sourceCurrency = sourceCurrencyRef.value
+    const targetCurrency = targetCurrencyRef.value
 
-    if (typeof editedAmount.value === 'number' && typeof rate === 'number' && rate > 0) {
-      const result = editedAmount.value * rate
-      targetAmount.value = parseFloat(result.toFixed(2))
-    } else if (typeof editedAmount.value === 'number') {
-      targetAmount.value = editedAmount.value === 0 ? 0 : null
-      if (rate === null && editedAmount.value !== 0) {
-        conversionError.value = `Нет курса для ${sourceCurrency.value} -> ${targetCurrency.value}`
-      }
+    // Если исходное значение не число или null, очищаем целевое
+    if (typeof sourceAmount !== 'number') {
+      targetAmountRef.value = null
+      return
+    }
+    // Если исходное значение 0, целевое тоже 0
+    if (sourceAmount === 0) {
+      targetAmountRef.value = 0
+      return
+    }
+
+    const rate = getConversionRate(sourceCurrency, targetCurrency, currencyStore.rates)
+
+    if (rate !== null) {
+      const result = sourceAmount * rate
+      targetAmountRef.value = parseFloat(result.toFixed(2))
     } else {
-      targetAmount.value = null
+      targetAmountRef.value = null
+      conversionError.value = `Нет курса для ${sourceCurrency} -> ${targetCurrency}`
     }
   }
 
+  // Следим за изменением amount1 И валют (чтобы пересчитать amount2)
   watch([amount1, currency1, currency2], () => {
+    // Пересчитываем amount2 только если amount1 был изменен пользователем
     if (lastEdited.value === 'amount1') {
-      convertAmount(amount1, currency1, amount2, currency2, true)
-      lastEdited.value = null
+      calculateAndUpdateTarget(amount1, currency1, currency2, amount2)
     }
   })
 
+  // Следим за изменением amount2 И валют (чтобы пересчитать amount1)
   watch([amount2, currency1, currency2], () => {
+    // Пересчитываем amount1 только если amount2 был изменен пользователем
     if (lastEdited.value === 'amount2') {
-      convertAmount(amount2, currency2, amount1, currency1, false)
-      lastEdited.value = null
+      calculateAndUpdateTarget(amount2, currency2, currency1, amount1)
+    }
+  })
+
+  watch([currency1, currency2], ([c1, c2], [oldC1, oldC2]) => {
+    if (oldC1 === undefined || oldC2 === undefined) return
+
+    // Если валюты стали одинаковыми
+    if (c1 === c2) {
+      // Копируем значение на основе того, что редактировали последним
+      if (lastEdited.value === 'amount1' && typeof amount1.value === 'number') {
+        amount2.value = amount1.value
+      } else if (lastEdited.value === 'amount2' && typeof amount2.value === 'number') {
+        amount1.value = amount2.value
+      }
+      return
     }
   })
 
@@ -107,33 +121,40 @@ export function useConverter(
     amount2.value = value
   }
 
-  watch([currency1, currency2], ([c1, c2]) => {
-    if (c1 === c2) {
-      if (lastEdited.value !== 'amount2' && typeof amount1.value === 'number') {
-        handleAmount2Input(amount1.value)
-      } else if (lastEdited.value !== 'amount1' && typeof amount2.value === 'number') {
-        handleAmount1Input(amount2.value)
-      }
-    } else {
-      if (lastEdited.value !== 'amount2') {
-        const currentAmount1 = amount1.value
-        handleAmount1Input(currentAmount1)
-      } else if (lastEdited.value !== 'amount1') {
-        const currentAmount2 = amount2.value
-        handleAmount2Input(currentAmount2)
-      }
+  const swapCurrencies = () => {
+    const tempCurrency = currency1.value
+    const tempAmount = amount1.value
+
+    currency1.value = currency2.value
+    currency2.value = tempCurrency
+
+    handleAmount2Input(tempAmount)
+    handleAmount1Input(amount2.value)
+  }
+
+  const conversionRateDisplay = computed(() => {
+    if (
+      currencyStore.loading ||
+      currencyStore.error ||
+      Object.keys(currencyStore.rates).length === 0
+    ) {
+      return null
     }
+    return getConversionRate(currency1.value, currency2.value, currencyStore.rates)
   })
+
+  watchEffect(() => console.log(lastEdited.value))
 
   return {
     amount1,
     amount2,
     currency1,
     currency2,
-    conversionRate,
+    conversionRate: conversionRateDisplay,
     error: conversionError,
     loading: computed(() => currencyStore.loading),
     handleAmount1Input,
     handleAmount2Input,
+    swapCurrencies,
   }
 }

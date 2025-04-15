@@ -87,20 +87,8 @@ const {
   loading,
   handleAmount1Input,
   handleAmount2Input,
+  swapCurrencies,
 } = useConverter('RUB', 'USD')
-
-const swapCurrencies = () => {
-  const tempCurrency = currency1.value
-  const tempAmount = amount1.value
-
-  currency1.value = currency2.value
-  currency2.value = tempCurrency
-
-  handleAmount2Input(tempAmount)
-  handleAmount1Input(amount2.value)
-
-  amount2.value = null
-}
 </script>
 
 <style scoped>

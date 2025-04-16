@@ -1,4 +1,4 @@
-import { ref, watch, computed, watchEffect } from 'vue'
+import { ref, watch, computed } from 'vue'
 import type { Ref } from 'vue'
 import { useCurrencyStore } from '@/stores/currencyStore'
 import type { SupportedCurrencyCode, RelevantExchangePairs } from '@/types/currency'
@@ -142,8 +142,6 @@ export function useConverter(
     }
     return getConversionRate(currency1.value, currency2.value, currencyStore.rates)
   })
-
-  watchEffect(() => console.log(lastEdited.value))
 
   return {
     amount1,
